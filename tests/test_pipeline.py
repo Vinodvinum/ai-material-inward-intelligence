@@ -21,3 +21,21 @@ def test_validation_passes():
     pos = [{"id":1,"po_number":"PO-1","supplier_id":1,"material_id":1,"expected_quantity":5000,"status":"OPEN"}]
     v = validate(fields, material, pos, 0.99, 1.0)
     assert v["status"] == "VALIDATED"
+    assert v["reasons"] == []
+
+def test_validation_routes_missing_data_to_review():
+    fields = {"part_number":"R10K-0603","lot_number":"","quantity":5000,"po_number":"PO-1"}
+    material = {"id":1,"material_code":"RES","part_number":"R10K-0603","manufacturer":"ABC","supplier_id":1}
+    pos = [{"id":1,"po_number":"PO-1","supplier_id":1,"material_id":1,"expected_quantity":5000,"status":"OPEN"}]
+    v = validate(fields, material, pos, 0.99, 1.0)
+    assert v["status"] == "REVIEW_REQUIRED"
+    assert v["review_required"] is True
+    assert "Lot number is missing" in v["reasons"]
+
+def test_validation_routes_wrong_po_material_to_review():
+    fields = {"part_number":"R10K-0603","lot_number":"L1","quantity":5000,"po_number":"PO-2"}
+    material = {"id":1,"material_code":"RES","part_number":"R10K-0603","manufacturer":"ABC","supplier_id":1}
+    pos = [{"id":2,"po_number":"PO-2","supplier_id":1,"material_id":99,"expected_quantity":5000,"status":"OPEN"}]
+    v = validate(fields, material, pos, 0.99, 1.0)
+    assert v["status"] == "REVIEW_REQUIRED"
+    assert "Material does not match the purchase order" in v["reasons"]

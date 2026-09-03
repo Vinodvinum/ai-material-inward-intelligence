@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+material_inward.db
+*.db
+.pytest_cache/
+.DS_Store

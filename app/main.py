@@ -1,6 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 from fastapi import Depends, FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from app.db.database import get_db, init_db
 from app.models.models import Material, PurchaseOrder, Receipt
@@ -9,7 +10,9 @@ from app.seed import seed
 from app.services.pipeline import run_ocr, extract_fields, normalize_fields, match_material
 from app.services.validation import validate
 
-app = FastAPI(title="AI-Assisted Material Inward Intelligence", version="0.1.0")
+app = FastAPI(title="AI-Assisted Material Inward Intelligence", version="0.2.0")
+
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
 @app.on_event("startup")
 def startup():

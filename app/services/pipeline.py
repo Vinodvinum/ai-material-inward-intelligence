@@ -16,8 +16,8 @@ if TESSERACT_CMD:
 FIELD_PATTERNS = {
     "manufacturer": [r"manufacturer\s*(?:[:\-]\s*|\s+)([^\n]+)", r"maker\s*(?:[:\-]\s*|\s+)([^\n]+)"],
     "part_number": [r"part\s*(?:no|number)\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+(?:\s+[A-Za-z0-9._\-/]+)?)", r"p/?n\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+(?:\s+[A-Za-z0-9._\-/]+)?)"],
-    "material_code": [r"material\s*(?:code|no|number)\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+)"],
-    "lot_number": [r"lot\s*(?:no|number)?\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+)", r"lotnnumber\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+)"],
+    "material_code": [r"material\s*(?:code|no|number)\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+(?:\s+[A-Za-z0-9._\-/]+)?)"],
+    "lot_number": [r"lot\s*(?:no|number)?\s*(?:[:\-]\s+|[:\-]|\s+)([A-Za-z0-9._\-/]+)", r"lotnnumber\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+)"],
     "quantity": [r"(?:qty|quantity)\s*(?:[:\-]\s*|\s+)([0-9,]+)"],
     "date_code": [r"date\s*code\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+)", r"dc\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+)"],
     "po_number": [r"(?:po|purchase\s*order)\s*(?:no|number)?\s*(?:[:\-]\s*|\s+)([A-Za-z0-9._\-/]+)"],
@@ -42,10 +42,7 @@ def preprocess(image_bytes: bytes) -> list[np.ndarray]:
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
     denoised = cv2.GaussianBlur(clahe, (3, 3), 0)
     otsu = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    adaptive = cv2.adaptiveThreshold(
-        denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY, 31, 11
-    )
+    adaptive = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11)
     return [gray, clahe, otsu, adaptive]
 
 
@@ -66,20 +63,12 @@ def _data_ocr(image: np.ndarray, psm: int) -> OCRResult:
             if value >= 0:
                 confs.append(value / 100.0)
         except (TypeError, ValueError):
-            pass
-
-    return OCRResult(
-        " ".join(words).strip(),
-        sum(confs) / len(confs) if confs else 0.0,
-        "tesseract_data",
-    )
+            continue
+    return OCRResult(" ".join(words).strip(), sum(confs) / len(confs) if confs else 0.0, "tesseract_data")
 
 
 def _text_ocr(image: np.ndarray, psm: int) -> OCRResult:
-    text = pytesseract.image_to_string(
-        Image.fromarray(image),
-        config=f"--oem 3 --psm {psm}",
-    ).strip()
+    text = pytesseract.image_to_string(Image.fromarray(image), config=f"--oem 3 --psm {psm}").strip()
     return OCRResult(text, 0.0, "tesseract_text")
 
 
@@ -95,13 +84,11 @@ def run_ocr(image_bytes: Optional[bytes], supplied_text: Optional[str] = None) -
         variants = preprocess(image_bytes)
         data_attempts: list[OCRResult] = []
         text_attempts: list[OCRResult] = []
-
         for variant in variants:
             for psm in (6, 11, 12):
-                result = _data_ocr(variant, psm)
-                if result.text:
-                    data_attempts.append(result)
-                # image_to_string preserves line boundaries, which improves field extraction.
+                data_result = _data_ocr(variant, psm)
+                if data_result.text:
+                    data_attempts.append(data_result)
                 text_result = _text_ocr(variant, psm)
                 if text_result.text:
                     text_attempts.append(text_result)
@@ -110,11 +97,7 @@ def run_ocr(image_bytes: Optional[bytes], supplied_text: Optional[str] = None) -
             raise RuntimeError("Tesseract returned no readable text from the supplied image")
 
         best_data = max(data_attempts, key=lambda r: (r.confidence, len(r.text)), default=None)
-        best_text = max(text_attempts, key=lambda r: len(r.text), default=None)
-
-        # Prefer line-preserving OCR text when available, while taking confidence from
-        # the strongest data pass. If data OCR is unavailable, confidence stays 0 and
-        # the validation layer will correctly route the case to review.
+        best_text = max(text_attempts, key=lambda r: (len(r.text), r.confidence), default=None)
         text = best_text.text if best_text else best_data.text
         confidence = best_data.confidence if best_data else 0.0
         return OCRResult(text, confidence, "tesseract_hybrid")
@@ -132,11 +115,9 @@ def extract_fields(text: str) -> dict:
             match = re.search(pattern, cleaned, flags=re.I)
             if match:
                 value = match.group(1).strip().strip(".,;")
-                # Stop a field value if OCR flattened the next labelled field onto the same line.
                 value = re.split(r"\s+(?=(?:manufacturer|maker|part\s*(?:no|number)|material\s*(?:code|no|number)|lot(?:\s*(?:no|number))?|qty|quantity|date\s*code|dc|po|purchase\s*order)\b)", value, maxsplit=1, flags=re.I)[0]
                 result[field] = value
                 break
-
     if "quantity" in result:
         try:
             result["quantity"] = int(result["quantity"].replace(",", ""))
@@ -157,7 +138,6 @@ def match_material(part_number: str, materials: list[dict], material_code: str |
     if not materials:
         return {"match": None, "score": 0.0, "candidates": []}
 
-    # Material code is a stronger identity signal than a noisy OCR part number.
     if material_code:
         code = material_code.upper()
         exact_code = next((m for m in materials if str(m.get("material_code", "")).upper() == code), None)

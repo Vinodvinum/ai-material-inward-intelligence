@@ -5,8 +5,9 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+import pytesseract
 
-from app.config import CORS_ORIGINS
+from app.config import CORS_ORIGINS, OCR_ENABLED, TESSERACT_CMD
 from app.db.database import get_db, init_db
 from app.models.models import InwardEvent, Material, PurchaseOrder, Receipt
 from app.schemas import Health, ProcessResult
@@ -14,7 +15,7 @@ from app.seed import seed
 from app.services.pipeline import extract_fields, match_material, normalize_fields, run_ocr
 from app.services.validation import validate
 
-app = FastAPI(title="AI-Assisted Material Inward Intelligence", version="0.4.0")
+app = FastAPI(title="AI-Assisted Material Inward Intelligence", version="0.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,6 +69,26 @@ def event_dict(event):
 @app.get("/health", response_model=Health)
 def health():
     return {"status": "ok"}
+
+
+@app.get("/diagnostics/ocr")
+def ocr_diagnostics():
+    """Expose safe runtime checks so hosted OCR failures can be distinguished from browser/network failures."""
+    result = {
+        "ocr_enabled": OCR_ENABLED,
+        "tesseract_configured_path": TESSERACT_CMD or "system PATH",
+        "tesseract_available": False,
+        "tesseract_version": None,
+    }
+    if not OCR_ENABLED:
+        return result
+    try:
+        version = pytesseract.get_tesseract_version()
+        result["tesseract_available"] = True
+        result["tesseract_version"] = str(version).splitlines()[0].strip()
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
 
 
 @app.post("/demo/seed")

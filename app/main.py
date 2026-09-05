@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from app.config import CORS_ORIGINS
 from app.db.database import get_db, init_db
 from app.models.models import InwardEvent, Material, PurchaseOrder, Receipt
 from app.schemas import Health, ProcessResult
@@ -15,13 +16,13 @@ from app.services.validation import validate
 
 app = FastAPI(title="AI-Assisted Material Inward Intelligence", version="0.3.0")
 
-# PoC default. For hosted deployment, restrict this to the Vercel frontend origin.
+# Hosted deployments can restrict browser access with CORS_ORIGINS.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
 

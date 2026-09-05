@@ -14,15 +14,14 @@ from app.seed import seed
 from app.services.pipeline import extract_fields, match_material, normalize_fields, run_ocr
 from app.services.validation import validate
 
-app = FastAPI(title="AI-Assisted Material Inward Intelligence", version="0.3.0")
+app = FastAPI(title="AI-Assisted Material Inward Intelligence", version="0.4.0")
 
-# Hosted deployments can restrict browser access with CORS_ORIGINS.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 
@@ -105,7 +104,6 @@ def receipt(uid: str, db: Session = Depends(get_db)):
 
 @app.get("/events")
 def events(limit: int = 100, db: Session = Depends(get_db)):
-    """Return the most recent inward audit events."""
     limit = max(1, min(limit, 500))
     rows = (
         db.query(InwardEvent)
@@ -140,7 +138,11 @@ async def process_inward(
         ocr = run_ocr(image_bytes, ocr_text)
         extracted = normalize_fields(extract_fields(ocr.text))
         mats = [material_dict(m) for m in db.query(Material).all()]
-        match = match_material(extracted.get("part_number", ""), mats)
+        match = match_material(
+            extracted.get("part_number", ""),
+            mats,
+            extracted.get("material_code"),
+        )
         pos = [po_dict(p) for p in db.query(PurchaseOrder).all()]
         validation = validate(
             extracted,
@@ -153,7 +155,6 @@ async def process_inward(
         uid = None
         persisted = False
 
-        # Only a fully validated material becomes a receipt/traceability identity.
         if persist and validation["status"] == "VALIDATED":
             uid = f"MAT-{datetime.utcnow():%Y%m%d}-{uuid4().hex[:8].upper()}"
             material = match["match"]
@@ -192,7 +193,6 @@ async def process_inward(
                 )
             )
 
-        # Every processing attempt gets an audit event, including review cases.
         db.add(
             InwardEvent(
                 event_type="INWARD_PROCESSED",

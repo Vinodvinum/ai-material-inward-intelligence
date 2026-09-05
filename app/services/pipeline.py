@@ -134,13 +134,23 @@ def normalize_fields(fields: dict) -> dict:
     return out
 
 
+def _canonical_code(value: str | None) -> str:
+    """Normalize separators/spaces so OCR variants such as RES-10K0603 match RES-10K-0603."""
+    if not value:
+        return ""
+    return re.sub(r"[^A-Z0-9]", "", str(value).upper())
+
+
 def match_material(part_number: str, materials: list[dict], material_code: str | None = None) -> dict:
     if not materials:
         return {"match": None, "score": 0.0, "candidates": []}
 
     if material_code:
-        code = material_code.upper()
-        exact_code = next((m for m in materials if str(m.get("material_code", "")).upper() == code), None)
+        code = _canonical_code(material_code)
+        exact_code = next(
+            (m for m in materials if _canonical_code(str(m.get("material_code", ""))) == code),
+            None,
+        )
         if exact_code:
             return {"match": exact_code, "score": 1.0, "candidates": [exact_code], "match_basis": "material_code_exact"}
 

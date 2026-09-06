@@ -51,10 +51,11 @@ export default function Home() {
       body.append('image', file)
       body.append('persist', 'true')
       const controller = new AbortController()
-      const timeout = window.setTimeout(() => controller.abort(), 90000)
+      const timeout = window.setTimeout(() => controller.abort(), 125000)
       let response: Response
       try {
-        response = await fetch(`${API_BASE}/inward/process`, { method: 'POST', body, signal: controller.signal })
+        // Same-origin Next.js proxy removes browser-to-Render CORS dependency.
+        response = await fetch('/api/process', { method: 'POST', body, signal: controller.signal })
       } finally {
         window.clearTimeout(timeout)
       }
@@ -66,9 +67,9 @@ export default function Home() {
       setStatus(data.validation?.status === 'VALIDATED' ? 'Material validated successfully' : 'Human review required')
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
-        setStatus('Processing timed out. The backend may be waking up; try the upload once more.')
+        setStatus('Processing timed out after 125 seconds. Check the backend logs for the request.')
       } else if (error instanceof TypeError) {
-        setStatus(`Cannot reach processing service at ${API_BASE}. Check backend/CORS deployment.`)
+        setStatus('The web processing proxy could not be reached. Please retry once the latest deployment is live.')
       } else {
         setStatus(error instanceof Error ? error.message : 'Unable to reach processing API')
       }

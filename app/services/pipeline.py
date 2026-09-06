@@ -32,18 +32,25 @@ class OCRResult:
 
 
 def preprocess(image_bytes: bytes) -> list[np.ndarray]:
-    """Create OCR-friendly variants for common label lighting/layout conditions."""
+    """Create a small set of OCR-friendly variants without multiplying Tesseract calls."""
     image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError("Invalid image")
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
+    # Hosted instances can be memory/CPU constrained. Keep OCR input large enough for labels
+    # but avoid the previous 3x enlargement of already high-resolution phone images.
+    max_dim = max(gray.shape[:2])
+    if max_dim > 2200:
+        scale = 2200.0 / max_dim
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    else:
+        gray = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
     denoised = cv2.GaussianBlur(clahe, (3, 3), 0)
     otsu = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    adaptive = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11)
-    return [gray, clahe, otsu, adaptive]
+    return [denoised, otsu]
 
 
 def _data_ocr(image: np.ndarray, psm: int) -> OCRResult:
@@ -67,11 +74,6 @@ def _data_ocr(image: np.ndarray, psm: int) -> OCRResult:
     return OCRResult(" ".join(words).strip(), sum(confs) / len(confs) if confs else 0.0, "tesseract_data")
 
 
-def _text_ocr(image: np.ndarray, psm: int) -> OCRResult:
-    text = pytesseract.image_to_string(Image.fromarray(image), config=f"--oem 3 --psm {psm}").strip()
-    return OCRResult(text, 0.0, "tesseract_text")
-
-
 def run_ocr(image_bytes: Optional[bytes], supplied_text: Optional[str] = None) -> OCRResult:
     if supplied_text and supplied_text.strip():
         return OCRResult(supplied_text.strip(), 1.0, "manual_ocr_text")
@@ -82,25 +84,29 @@ def run_ocr(image_bytes: Optional[bytes], supplied_text: Optional[str] = None) -
 
     try:
         variants = preprocess(image_bytes)
-        data_attempts: list[OCRResult] = []
-        text_attempts: list[OCRResult] = []
-        for variant in variants:
-            for psm in (6, 11, 12):
-                data_result = _data_ocr(variant, psm)
-                if data_result.text:
-                    data_attempts.append(data_result)
-                text_result = _text_ocr(variant, psm)
-                if text_result.text:
-                    text_attempts.append(text_result)
+        attempts: list[OCRResult] = []
 
-        if not data_attempts and not text_attempts:
+        # Fast path: two preprocessing variants with the layout-oriented PSM 6.
+        # This replaces the old 24-48 Tesseract calls per upload and is much safer on Render.
+        for variant in variants:
+            result = _data_ocr(variant, 6)
+            if result.text:
+                attempts.append(result)
+
+        best = max(attempts, key=lambda r: (r.confidence, len(r.text)), default=None)
+
+        # Only spend extra OCR work when the fast path produced weak/no confidence.
+        if best is None or best.confidence < 0.55:
+            for variant in variants:
+                result = _data_ocr(variant, 11)
+                if result.text:
+                    attempts.append(result)
+
+        if not attempts:
             raise RuntimeError("Tesseract returned no readable text from the supplied image")
 
-        best_data = max(data_attempts, key=lambda r: (r.confidence, len(r.text)), default=None)
-        best_text = max(text_attempts, key=lambda r: (len(r.text), r.confidence), default=None)
-        text = best_text.text if best_text else best_data.text
-        confidence = best_data.confidence if best_data else 0.0
-        return OCRResult(text, confidence, "tesseract_hybrid")
+        best = max(attempts, key=lambda r: (r.confidence, len(r.text)))
+        return OCRResult(best.text, best.confidence, "tesseract_hybrid")
     except RuntimeError:
         raise
     except Exception as exc:
